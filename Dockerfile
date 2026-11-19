@@ -46,5 +46,5 @@ RUN mkdir -p uploads
 # Expose the port Railway / Render will bind to
 EXPOSE 8000
 
-# Start FastAPI (single process — Railway/Render manage scaling)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start FastAPI (single process — Railway/Render manage scaling via PORT env)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

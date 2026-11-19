@@ -86,6 +86,42 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables ready.")
 
+    # 1b. Auto-seed default users if database is empty
+    try:
+        from app.models.user import User
+        from app.core.security import hash_password
+        with SessionLocal() as db:
+            if db.query(User).count() == 0:
+                logger.info("Database has no users. Auto-seeding initial users...")
+                initial_users = [
+                    User(
+                        email="admin@retailbi.com",
+                        full_name="System Administrator",
+                        hashed_password=hash_password("Admin@123"),
+                        role="admin",
+                        is_active=True,
+                    ),
+                    User(
+                        email="manager@retailbi.com",
+                        full_name="Business Manager",
+                        hashed_password=hash_password("Manager@123"),
+                        role="manager",
+                        is_active=True,
+                    ),
+                    User(
+                        email="analyst@retailbi.com",
+                        full_name="Data Analyst",
+                        hashed_password=hash_password("Analyst@123"),
+                        role="analyst",
+                        is_active=True,
+                    ),
+                ]
+                db.add_all(initial_users)
+                db.commit()
+                logger.info("Default users seeded (admin@retailbi.com, manager@retailbi.com, analyst@retailbi.com).")
+    except Exception as exc:
+        logger.warning("Could not auto-seed default users: %s", exc)
+
     # 2. Health check
     if check_db_connection():
         logger.info("✅ PostgreSQL connection: OK")
@@ -279,29 +315,31 @@ async def health_check() -> dict:
     }
 
 
-@app.get("/", tags=["System"], include_in_schema=False)
-async def root() -> dict:
-    """Redirect hint for the API root."""
-    return {
-        "message": "Retail BI API is running. Visit /docs for Swagger UI.",
-        "docs": "/docs",
-        "health": "/health",
-    }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Static Frontend (React build — served from frontend/dist)
 # Single-URL deployment: FastAPI serves both API (/api/v1/*) and React SPA
 # ─────────────────────────────────────────────────────────────────────────────
-_FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+_CANDIDATE_PATHS = [
+    Path(__file__).resolve().parent.parent / "frontend" / "dist",        # Docker: /app/frontend/dist
+    Path(__file__).resolve().parent.parent.parent / "frontend" / "dist", # Local repo root: frontend/dist
+    Path("/app/frontend/dist"),                                          # Explicit container path
+]
+_FRONTEND_DIST = next((p for p in _CANDIDATE_PATHS if p.exists() and (p / "index.html").is_file()), None)
 
-if _FRONTEND_DIST.exists():
+if _FRONTEND_DIST:
+    logger.info("Serving React frontend from: %s", _FRONTEND_DIST)
     # Serve static assets (JS, CSS, images, etc.)
-    app.mount(
-        "/assets",
-        StaticFiles(directory=str(_FRONTEND_DIST / "assets")),
-        name="frontend_assets",
-    )
+    if (_FRONTEND_DIST / "assets").exists():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(_FRONTEND_DIST / "assets")),
+            name="frontend_assets",
+        )
+
+    @app.get("/", include_in_schema=False, tags=["Frontend"])
+    async def serve_root():
+        """Root route serves the React SPA index.html."""
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))
 
     @app.get("/{full_path:path}", include_in_schema=False, tags=["Frontend"])
     async def serve_spa(full_path: str):
@@ -309,12 +347,29 @@ if _FRONTEND_DIST.exists():
         SPA catch-all: returns index.html for every non-API, non-asset route
         so React Router handles client-side navigation.
         """
-        # If a specific file exists (favicon.ico, etc.) serve it
+        # Do not catch API or documentation endpoints
+        if (
+            full_path.startswith("api/")
+            or full_path.startswith("assets/")
+            or full_path in ("docs", "redoc", "openapi.json", "health")
+        ):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        # If a specific static file exists (favicon.ico, vite.svg, etc.) serve it
         file_path = _FRONTEND_DIST / full_path
         if file_path.is_file():
             return FileResponse(str(file_path))
-        # Otherwise serve index.html (React Router takes over)
+        # Otherwise serve index.html (React Router takes over client-side navigation)
         return FileResponse(str(_FRONTEND_DIST / "index.html"))
+else:
+    @app.get("/", tags=["System"], include_in_schema=False)
+    async def root() -> dict:
+        """API root hint when frontend dist is not present."""
+        return {
+            "message": "Retail BI API is running. Visit /docs for Swagger UI.",
+            "docs": "/docs",
+            "health": "/health",
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
