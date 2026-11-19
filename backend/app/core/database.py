@@ -19,8 +19,12 @@ from app.core.config import settings
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────
+_raw_db_url = settings.DATABASE_URL
+if _raw_db_url.startswith("postgres://"):
+    _raw_db_url = _raw_db_url.replace("postgres://", "postgresql://", 1)
+
 engine = create_engine(
-    settings.DATABASE_URL,
+    _raw_db_url,
     pool_pre_ping=True,          # test connections before use (handles DB restarts)
     pool_size=10,                # number of persistent connections in pool
     max_overflow=20,             # extra connections allowed beyond pool_size
