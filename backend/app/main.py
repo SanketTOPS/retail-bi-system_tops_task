@@ -165,7 +165,7 @@ app = FastAPI(
     version=settings.APP_VERSION,
     contact={
         "name": "Retail BI Team",
-        "email": "admin@retailbi.local",
+        "email": "admin@retailbi.com",
     },
     license_info={"name": "MIT"},
     docs_url="/docs",        # Swagger UI
