@@ -5,13 +5,11 @@
  *
  * Capabilities:
  *  - ChatGPT-style conversation view with chronological message history.
- *  - Optional context binding: Ask questions grounded in a specific Analysis Run
- *    or against the entire active enterprise retail store.
- *  - Quick prompt recommendation pills for immediate insight exploration.
- *  - Typing animation indicator while the single-agent Q&A tool-grounded advisor runs.
- *  - Clear conversation history action.
- *  - Strict grounding: The agent is programmed to say "Data not available" instead
- *    of hallucinating, and only uses numbers derived from deterministic tools.
+ *  - Full markdown formatting (bolding, bullet points, numbers, clean line breaks).
+ *  - Responsive across desktop, tablet, and mobile displays.
+ *  - Grounded in live PostgreSQL analytics & verified intelligence reports.
+ *  - Quick prompt recommendations & follow-ups.
+ *  - Typing animation indicator while agent computes data tools.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -30,6 +28,73 @@ const SUGGESTED_QUESTIONS = [
   'What are our top 3 stockout risk areas, and what reorder adjustments are recommended?',
   'Explain our operating cost-to-revenue ratio and major expense categories.',
 ];
+
+/**
+ * Lightweight inline markdown renderer for ChatGPT-like formatting.
+ */
+function renderInlineStyles(str) {
+  if (!str) return '';
+  const parts = str.split(/(\*\*.*?\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
+}
+
+function FormattedMessage({ text }) {
+  if (!text) return null;
+
+  const lines = text.split('\n');
+  return (
+    <div className="chat-markdown">
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return <div key={idx} className="chat-md-spacer" />;
+        }
+
+        // Bullet item
+        if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
+          const content = trimmed.substring(2);
+          return (
+            <div key={idx} className="chat-md-bullet">
+              <span className="chat-bullet-dot">•</span>
+              <span>{renderInlineStyles(content)}</span>
+            </div>
+          );
+        }
+
+        // Numbered list item
+        const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+        if (numMatch) {
+          return (
+            <div key={idx} className="chat-md-bullet">
+              <span className="chat-bullet-num">{numMatch[1]}.</span>
+              <span>{renderInlineStyles(numMatch[2])}</span>
+            </div>
+          );
+        }
+
+        // Header style
+        if (trimmed.startsWith('### ')) {
+          return (
+            <h4 key={idx} className="chat-md-h4">
+              {renderInlineStyles(trimmed.substring(4))}
+            </h4>
+          );
+        }
+
+        return (
+          <p key={idx} className="chat-md-p">
+            {renderInlineStyles(line)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function Chat() {
   const [messages, setMessages] = useState([]);
@@ -50,7 +115,8 @@ export default function Chat() {
         getChatHistoryApi().catch(() => ({ messages: [] })),
         getAnalysisHistoryApi().catch(() => []),
       ]);
-      setMessages(histRes.messages || []);
+      const fetched = Array.isArray(histRes) ? histRes : (histRes?.messages || []);
+      setMessages(fetched);
       setHistoryRuns(runsRes || []);
     } catch {
       toast.error('Failed to load conversation history.');
@@ -63,12 +129,22 @@ export default function Chat() {
     loadChat();
   }, []);
 
-  // ── 2. Scroll to bottom on new message ─────────────────────────────────────
+  // ── 2. Auto-scroll on new message ──────────────────────────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, sending]);
 
-  // ── 3. Send Message ────────────────────────────────────────────────────────
+  // ── 3. Auto-grow textarea height ───────────────────────────────────────────
+  const handleInputChange = (e) => {
+    setInputMessage(e.target.value);
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+    }
+  };
+
+  // ── 4. Send Message ────────────────────────────────────────────────────────
   const handleSendMessage = async (textToSend) => {
     const text = (textToSend || inputMessage).trim();
     if (!text || sending) return;
@@ -76,12 +152,15 @@ export default function Chat() {
     // Optimistically push user message to UI
     const tempUserMsg = {
       id: `temp-${Date.now()}`,
-      sender: 'user',
-      message: text,
+      role: 'user',
+      content: text,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, tempUserMsg]);
     setInputMessage('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
     setSending(true);
 
     try {
@@ -90,16 +169,23 @@ export default function Chat() {
         analysis_id: selectedAnalysisId || null,
       });
 
+      const userMsg = result?.user_message;
+      const assistantMsg = result?.assistant_message;
+
       // Replace optimistic message and append assistant response
       setMessages((prev) => {
         const filtered = prev.filter((m) => m.id !== tempUserMsg.id);
-        return [...filtered, result.user_message, result.assistant_message];
+        const nextList = [...filtered];
+        if (userMsg) nextList.push(userMsg);
+        else nextList.push(tempUserMsg);
+        if (assistantMsg) nextList.push(assistantMsg);
+        return nextList;
       });
     } catch (err) {
       const detail = err.response?.data?.detail;
       const msg = typeof detail === 'string' ? detail : 'Failed to send message to AI advisor.';
       toast.error(msg);
-      // Remove failed message
+      // Remove failed optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
     } finally {
       setSending(false);
@@ -113,7 +199,7 @@ export default function Chat() {
     }
   };
 
-  // ── 4. Clear Conversation History ──────────────────────────────────────────
+  // ── 5. Clear Conversation History ──────────────────────────────────────────
   const handleClearHistory = async () => {
     const confirmed = window.confirm('Are you sure you want to clear your conversation history?');
     if (!confirmed) return;
@@ -130,11 +216,11 @@ export default function Chat() {
   return (
     <div className="page-wrapper chat-page">
       {/* ── Top Bar ── */}
-      <div className="dashboard-header">
+      <div className="dashboard-header chat-header">
         <div>
           <h2 className="page-header__title">Grounded Business AI Advisor</h2>
           <p className="page-header__sub">
-            Inquire directly with your data. The advisor accesses verified analytical tools and refuses to hallucinate.
+            Inquire directly with your retail data. The advisor verifies metrics with Pandas tools and refuses to hallucinate.
           </p>
         </div>
 
@@ -197,8 +283,8 @@ export default function Chat() {
                     className="chat-suggestion-card"
                     onClick={() => handleSendMessage(q)}
                   >
-                    <span>💡</span>
-                    <p>{q}</p>
+                    <span className="chat-suggestion-icon">💡</span>
+                    <p className="chat-suggestion-text">{q}</p>
                   </button>
                 ))}
               </div>
@@ -206,7 +292,9 @@ export default function Chat() {
           ) : (
             <div className="chat-stream">
               {messages.map((msg, index) => {
-                const isUser = msg.sender === 'user';
+                const isUser = msg.role === 'user' || msg.sender === 'user';
+                const messageText = msg.content || msg.message || '';
+
                 return (
                   <div
                     key={msg.id || index}
@@ -220,7 +308,11 @@ export default function Chat() {
 
                     <div className={`chat-bubble ${isUser ? 'chat-bubble--user' : 'chat-bubble--assistant'}`}>
                       <div className="chat-bubble__content">
-                        {msg.message}
+                        {isUser ? (
+                          <p className="chat-user-text">{messageText}</p>
+                        ) : (
+                          <FormattedMessage text={messageText} />
+                        )}
                       </div>
                       <span className="chat-bubble__time">
                         {new Date(msg.created_at || Date.now()).toLocaleTimeString([], {
@@ -249,7 +341,7 @@ export default function Chat() {
                       <span />
                       <span />
                     </div>
-                    <span className="typing-label">Analyzing PostgreSQL tables &amp; verifying metrics...</span>
+                    <span className="typing-label">Querying database &amp; computing grounded insights...</span>
                   </div>
                 </div>
               )}
@@ -262,7 +354,7 @@ export default function Chat() {
         {/* ── Suggested Questions Strip (When chat active) ── */}
         {messages.length > 0 && !sending && (
           <div className="chat-quick-strip">
-            <span className="chat-quick-label">Suggested follow-ups:</span>
+            <span className="chat-quick-label">Suggestions:</span>
             <div className="chat-quick-scroll">
               {SUGGESTED_QUESTIONS.slice(0, 3).map((q, idx) => (
                 <button
@@ -284,9 +376,9 @@ export default function Chat() {
             ref={textareaRef}
             className="chat-textarea"
             rows={1}
-            placeholder="Ask a question about sales, inventory, profit margins, or anomalies..."
+            placeholder="Ask about sales, inventory health, profit margins, anomalies..."
             value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             disabled={sending}
           />
@@ -296,6 +388,7 @@ export default function Chat() {
             onClick={() => handleSendMessage()}
             disabled={!inputMessage.trim() || sending}
             aria-label="Send message"
+            title="Send"
           >
             {sending ? <span className="spinner spinner--sm" /> : '➤'}
           </button>
