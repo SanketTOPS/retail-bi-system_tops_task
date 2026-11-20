@@ -98,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 1b. Auto-seed default users if database is empty
     if db_initialized:
         try:
+            from app.core.database import SessionLocal
             from app.models.user import User
             from app.core.security import hash_password
             with SessionLocal() as db:
