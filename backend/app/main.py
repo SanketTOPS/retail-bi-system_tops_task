@@ -81,46 +81,56 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     import os
 
-    # 1. Create tables
-    logger.info("Creating database tables (if not exist)…")
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables ready.")
+    # 1. Create tables with retry loop
+    import time
+    logger.info("Connecting to database and creating tables (if not exist)…")
+    db_initialized = False
+    for attempt in range(1, 6):
+        try:
+            Base.metadata.create_all(bind=engine)
+            db_initialized = True
+            logger.info("Database tables ready.")
+            break
+        except Exception as e:
+            logger.warning("Database connection attempt %d/5 failed: %s. Retrying in 3s...", attempt, e)
+            time.sleep(3)
 
     # 1b. Auto-seed default users if database is empty
-    try:
-        from app.models.user import User
-        from app.core.security import hash_password
-        with SessionLocal() as db:
-            if db.query(User).count() == 0:
-                logger.info("Database has no users. Auto-seeding initial users...")
-                initial_users = [
-                    User(
-                        email="admin@retailbi.com",
-                        full_name="System Administrator",
-                        hashed_password=hash_password("Admin@123"),
-                        role="admin",
-                        is_active=True,
-                    ),
-                    User(
-                        email="manager@retailbi.com",
-                        full_name="Business Manager",
-                        hashed_password=hash_password("Manager@123"),
-                        role="manager",
-                        is_active=True,
-                    ),
-                    User(
-                        email="analyst@retailbi.com",
-                        full_name="Data Analyst",
-                        hashed_password=hash_password("Analyst@123"),
-                        role="analyst",
-                        is_active=True,
-                    ),
-                ]
-                db.add_all(initial_users)
-                db.commit()
-                logger.info("Default users seeded (admin@retailbi.com, manager@retailbi.com, analyst@retailbi.com).")
-    except Exception as exc:
-        logger.warning("Could not auto-seed default users: %s", exc)
+    if db_initialized:
+        try:
+            from app.models.user import User
+            from app.core.security import hash_password
+            with SessionLocal() as db:
+                if db.query(User).count() == 0:
+                    logger.info("Database has no users. Auto-seeding initial users...")
+                    initial_users = [
+                        User(
+                            email="admin@retailbi.com",
+                            full_name="System Administrator",
+                            hashed_password=hash_password("Admin@123"),
+                            role="admin",
+                            is_active=True,
+                        ),
+                        User(
+                            email="manager@retailbi.com",
+                            full_name="Business Manager",
+                            hashed_password=hash_password("Manager@123"),
+                            role="manager",
+                            is_active=True,
+                        ),
+                        User(
+                            email="analyst@retailbi.com",
+                            full_name="Data Analyst",
+                            hashed_password=hash_password("Analyst@123"),
+                            role="analyst",
+                            is_active=True,
+                        ),
+                    ]
+                    db.add_all(initial_users)
+                    db.commit()
+                    logger.info("Default users seeded (admin@retailbi.com, manager@retailbi.com, analyst@retailbi.com).")
+        except Exception as exc:
+            logger.warning("Could not auto-seed default users: %s", exc)
 
     # 2. Health check
     if check_db_connection():
